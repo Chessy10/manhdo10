@@ -42,7 +42,7 @@ ENV PATH=$PATH:/opt/spark/bin
 COPY  data_create.py ./data_create.py
 COPY  ./Sales_Records.csv ./Sales_Records.csv
 COPY  codepython.py ./codepython.py
-
+```
 
 Ở đây, dự án sử dụng một Docker image base từ [Docker Hub](https://hub.docker.com/) là OpenJDK, một image base phổ biến cho ứng dụng Java, sau đó cài đặt Python, Spark và Hadoop vào trong đó. Mục đích chung là chuẩn bị cho Pyspark, do đó ta có thể thay đổi thứ tự cài đặt ví dụ như sử dụng image base cho Python sau đó cài đặt Java, Spark, Hadoop. Bên cạnh đó dự án cài đặt cơ sở dữ liệu SQLite và công cụ Pip để tải các gói thư viện trong Python.
 
@@ -60,19 +60,13 @@ Khi đó trong Docker Desktop sẽ xuất hiện một Image như sau:
 
 <img src="./img/picture2.png">
 
-Chọn vào Image đó, ta sẽ tìm được một đường link truy cập vào Jupyter Notebook.
-
-<img src="./img/picture3.png">
-
-<img src="./img/picture4.png">
-
 Như vậy bước cài đặt đã thành công và trong các bước sau ta sẽ thực hiện một số các câu lệnh truy vấn trong Pyspark.
 
 # **Implementation**
 
 **Bước 1:** Tạo cơ sở dữ liệu:
 
-Ta sẽ tạo một cơ sở dữ liệu ở đây. Dự án đã chuẩn bị một file `createdb.ipynb` giúp ta tạo ra một cơ sở dữ liệu SQLite bằng sqlite3.
+Ta sẽ tạo một cơ sở dữ liệu ở đây. Dự án đã chuẩn bị một file `data_create.py` giúp ta tạo ra một cơ sở dữ liệu SQLite bằng sqlite3.
 
 ```
 import sqlite3
@@ -80,44 +74,39 @@ import random
 import string
 import pandas as pd
 
-data = pd.read_csv('/workspace/bankdataset.csv')
+data = pd.read_csv('Sales_Records.csv')
 # Connect to SQLite database (creates it if it doesn't exist)
-conn = sqlite3.connect('bank.db')
+conn = sqlite3.connect('sales_records.db')
 cursor = conn.cursor()
 
 # Create a sample table
 cursor.execute('''
-CREATE TABLE IF NOT EXISTS bank (
-    Date VARCHAR(255) NOT NULL,
-    Domain VARCHAR(255) NOT NULL,
-	Location VARCHAR(255) NOT NULL,
-	Value INT NOT NULL,
-	Transaction_count INT NOT NULL 
+CREATE TABLE IF NOT EXISTS sales (
+    Country VARCHAR(255) NOT NULL,
+	Price FLOAT NOT NULL,
+    Cost FLOAT NOT NULL,
+    Revenue FLOAT NOT NULL,
+    TotalCost FLOAT NOT NULL
 );
 ''')
 
 # Insert data from CSV into the database
-data.to_sql('bank', conn, if_exists='append', index=False)
+data.to_sql('sales', conn, if_exists='append', index=False)
 
 # Commit and close the connection
 conn.commit()
 conn.close()
 ```
 
-Đầu tiên ta tạo một database có tên là bank. Sau đó tạo một Table cũng tên là bank bao gồm có 5 cột: Date, Domain, Location, Value và Transaction_count. Ta insert vào bảng một file `bankdataset.csv` bao gồm 1004480 dòng. Đây là một bộ dataset thống kê tổng số giao dịch và tổng số tiền của các giao dịch tại các thành phố ở Ấn Độ, của các dịch vụ khác nhau (như nhà hàng, đầu tư, bán lẻ, …) mỗi ngày trong năm 2022.
-
-Kiểm tra chắc chắn xem file `bank.db` đã được tạo ra chưa. Sau đó qua bước tiếp theo.
-
-<img src="./img/picture5.png">
-
 **Bước 2:** Kết nối với database
 
 ```
 from pyspark.sql import SparkSession
 
-# Set up jdbc driver
+# set up jdbc driver for connect database
 spark = SparkSession.builder.config('spark.jars.packages', 'org.xerial:sqlite-jdbc:3.46.0.0').getOrCreate()
-df = spark.read.format('jdbc').options(driver='org.sqlite.JDBC', dbtable='bank',url='jdbc:sqlite:/workspace/bank.db').load()
+
+df = spark.read.format('jdbc').options(driver='org.sqlite.JDBC', dbtable='sales',url='jdbc:sqlite:/sales_records.db').load()dbtable='bank',url='jdbc:sqlite:/workspace/bank.db').load()
 ```
 
 Để kết nối với database SQLite, dự án sử dụng một chuẩn API để tương tác với cơ sở dữ liệu có tên là JDBC driver. Cụ thể dự án sử dụng sqlite jdbc driver 3.46.0.0.
@@ -132,53 +121,44 @@ df = spark.read.format('jdbc').options(driver='org.sqlite.JDBC', dbtable='bank',
 from pyspark.sql import Row
 
 # Create a new row
-new_row = Row(Date='2/1/2023', Domain='INTERNATIONAL', Location='Bombay', Value=552250, Transaction_count=2345)
-
+new_row = Row(Country = 'Vietnam',Price = 100.1, Cost = 99.99, Revenue = 1231.23, TotalCost = 101020.03)
 # Convert the Row into a DataFrame
 new_df = spark.createDataFrame([new_row], schema=df.schema)
-
 # Append the new DataFrame to the existing DataFrame
 df = df.union(new_df)
-
 # Show the updated DataFrame
 df.tail(10)
 ```
 - Với thao tác Read:
 ```
 # Read operation
-filtered_df = df.filter(df.Transaction_count > 2000)
-
-# Search the number of cities has more than 2000 transactions
+filtered_df = df.filter(df.Price > 100)
+# Search the price more 100 transactions
 filtered_df.show()
-print("Số thành phố có trên 2000 giao dịch: ", filtered_df.count())
+print("Price higher 100: ", filtered_df.count())
 ```
 - Với thao tác Update:
 ```
 # Update operation
 from pyspark.sql.functions import when
 
-# Update the last row column with Value = 500000 and Transaction_count = 2000
-df = df.withColumn('Value', when((df.Date == '2/1/2023') & 
-                                 (df.Domain == 'INTERNATIONAL') & 
-                                 (df.Location == 'Bombay'), 50000).otherwise(df.Value)) \
-               .withColumn('Transaction_count', when((df.Date == '2/1/2023') & 
-                                                     (df.Domain == 'INTERNATIONAL') & 
-                                                     (df.Location == 'Bombay'), 2000).otherwise(df.Transaction_count))
-
+# Update the last row column with Price = 111 
+df = df.withColumn('Price', when((df.Country == 'Vietnam') & \
+                                 (df.Cost == 56.67) & \
+                                 (df.Revenue == 652532.3) & \
+                                 (df.TotalCost == 452453.3), 111).otherwise(df.Price))
 # Show the updated DataFrame
 df.tail(10)
 ```
 - Với thao tác Delete:
 ```
 # Delete Operation
-df.head(5)
-df = df.filter(~((df.Date == '1/1/2022') & 
-                 (df.Domain == 'RESTRAUNT') & 
-                 (df.Location == 'Bhuj') & 
-                 (df.Value == 365554) & 
-                 (df.Transaction_count == 1932))) # Try delete the first row
+df = df.filter(~((df.Country == 'South Africa') & 
+                 (df.Price == 9.33) & 
+                 (df.Cost == 6.92) & 
+                 (df.Revenue == 14862.96) & 
+                 (df.TotalCost == 11023.56))) # Try delete the first row
 
-# Show the filtered DataFrame
 df.head(5)
 ```
 
@@ -186,41 +166,44 @@ df.head(5)
 
 - Khi không có Where:
 ```
-%%time
-df.createOrReplaceTempView("bank")
-spark.sql("SELECT * FROM bank").show(10)
+start_time = time.time()
+df.createOrReplaceTempView("sales")
+spark.sql("SELECT * FROM sales").show(10)
+end_time = time.time()
+print("execution time", end_time - start_time)
 ```
 
-Thời gian chạy là 7.64 ms.
+Thời gian chạy là  0.4169647693634033(s).
 
 - Khi có Where:
 ```
-%%time
-spark.sql("SELECT * FROM bank WHERE Transaction_count > 2000").show(10)
+start_time1 = time.time()
+spark.sql("SELECT * FROM sales WHERE Price > 100").show(10)
+end_time1 = time.time()
+print("execution time1", end_time1 - start_time1)
 ```
 
-Thời gian chạy là 6.84 ms. Nhanh hơn một chút so với không có Where.
+Thời gian chạy là 0.3521144390106201(s). Nhanh hơn một chút so với không có Where.
 
 - Khi có Group By:
 ```
-%%time
-spark.sql("SELECT Location, SUM(Value) as TotalValue FROM bank WHERE Transaction_count > 2000 GROUP BY Location").show(10)
+start_time2 = time.time()
+spark.sql("SELECT Country, SUM(Price) as TotalValue FROM sales WHERE Price > 100 GROUP BY Country").show(10)
+end_time2 = time.time()
+print("execution time2", end_time2 - start_time2)
 ```
 
-Thời gian chạy là 14 ms. Lâu hơn một chút do tính toán tổng của giá trị.
+Thời gian chạy là  2.863360643386841(s). Lâu hơn một chút do tính toán tổng của giá trị.
 
 - Khi có Having:
 ```
-%%time
-spark.sql("""
-        SELECT Location, SUM(Value) as TotalValue 
-        FROM bank 
-        WHERE Transaction_count > 2000 
-        GROUP BY Location 
-        HAVING TotalValue > 4200000000""").show(10)
+start_time3 = time.time()
+spark.sql("SELECT Country, SUM(Price) as TotalValue FROM sales WHERE Price > 100 GROUP BY Country HAVING TotalValue > 1360000").show(10)
+end_time3 = time.time()
+print("execution time3", end_time3 - start_time3))
 ```
 
-Thời gian chạy mất 13.1 ms. Nhanh hơn một chút so với Group By.
+Thời gian chạy mất  2.1196095943450928(s). Nhanh hơn một chút so với Group By.
 
 # **Conclusion**
 
@@ -228,8 +211,8 @@ Như vậy, documentation này đã cung cấp một hướng dẫn đầy đủ
 
 # **Contact**
 
-Lê Trung Kiên
+Đỗ Mạnh Đô
 
-Email: letrungkien3_t66@hus.edu.vn
+Email: manhdo101023@gmail.com
 
-Number Phone: 0353693404
+Number Phone: 0383394223
